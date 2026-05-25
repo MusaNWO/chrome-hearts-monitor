@@ -31,6 +31,7 @@ const LOCATION_NAMES = {
   'chromeheartsmiami':      'Chrome Hearts Miami',
   'lasvegas-fontaine':      'Chrome Hearts Las Vegas',
   'chromehearts-newyork':   'Chrome Hearts New York',
+  'chromehearts':           'Chrome Hearts New York West Village',
   'chromeheartswestvillage':'Chrome Hearts West Village',
 };
 
