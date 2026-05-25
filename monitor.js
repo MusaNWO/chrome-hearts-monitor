@@ -14,12 +14,12 @@ const path = require('path');
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const TELEGRAM_CHAT_IDS = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
 
 if (!TELEGRAM_TOKEN || TELEGRAM_TOKEN === 'your_bot_token_here') {
   console.error('❌  Missing TELEGRAM_BOT_TOKEN in .env'); process.exit(1);
 }
-if (!TELEGRAM_CHAT_ID || TELEGRAM_CHAT_ID === 'your_chat_id_here') {
+if (TELEGRAM_CHAT_IDS.length === 0) {
   console.error('❌  Missing TELEGRAM_CHAT_ID in .env'); process.exit(1);
 }
 
@@ -93,9 +93,9 @@ function formatSlot(slot) {
 }
 
 // ─── Telegram ──────────────────────────────────────────────────────────────────
-function sendTelegram(text) {
+function sendToOne(chatId, text) {
   return new Promise((resolve) => {
-    const body = JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text, parse_mode: 'HTML' });
+    const body = JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' });
     const req = https.request({
       hostname: 'api.telegram.org',
       path: `/bot${TELEGRAM_TOKEN}/sendMessage`,
@@ -107,15 +107,19 @@ function sendTelegram(text) {
       res.on('end', () => {
         try {
           const json = JSON.parse(data);
-          if (!json.ok) log(`⚠️  Telegram error: ${JSON.stringify(json)}`);
+          if (!json.ok) log(`⚠️  Telegram error (${chatId}): ${JSON.stringify(json)}`);
           resolve(json);
         } catch { resolve(null); }
       });
     });
-    req.on('error', e => { log(`⚠️  Telegram send failed: ${e.message}`); resolve(null); });
+    req.on('error', e => { log(`⚠️  Telegram send failed (${chatId}): ${e.message}`); resolve(null); });
     req.write(body);
     req.end();
   });
+}
+
+async function sendTelegram(text) {
+  await Promise.all(TELEGRAM_CHAT_IDS.map(id => sendToOne(id, text)));
 }
 
 // ─── Alert ─────────────────────────────────────────────────────────────────────
@@ -232,7 +236,7 @@ async function main() {
   console.log('╚══════════════════════════════════════════════════════════╝');
   LOCATIONS.forEach(l => console.log(`  📍 ${l.name}`));
   console.log(`  Polling : every ${CONFIG.pollIntervalMs / 1000}s  |  Look-ahead: ${CONFIG.lookAheadDays} days`);
-  console.log(`  Telegram: chat ${TELEGRAM_CHAT_ID}`);
+  console.log(`  Telegram: ${TELEGRAM_CHAT_IDS.length} recipient(s): ${TELEGRAM_CHAT_IDS.join(', ')}`);
   console.log('──────────────────────────────────────────────────────────\n');
 
   log(`Monitor started — watching ${LOCATIONS.map(l => l.id).join(', ')}`);
