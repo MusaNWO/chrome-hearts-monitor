@@ -3,23 +3,21 @@ require('dotenv').config();
 
 /**
  * Chrome Hearts Appointment Slot Monitor — Multi-Location
- * Prefers lightweight HTTPS (no browser). Falls back to Playwright
- * only if the Waitwhile WAF blocks direct requests.
+ * Lightweight HTTPS only (no Chromium) — stable on Railway.
  */
 
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-// ─── Config ────────────────────────────────────────────────────────────────────
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_IDS = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
 
 if (!TELEGRAM_TOKEN || TELEGRAM_TOKEN === 'your_bot_token_here') {
-  console.error('❌  Missing TELEGRAM_BOT_TOKEN in .env'); process.exit(1);
+  console.error('❌  Missing TELEGRAM_BOT_TOKEN'); process.exit(1);
 }
 if (TELEGRAM_CHAT_IDS.length === 0) {
-  console.error('❌  Missing TELEGRAM_CHAT_ID in .env'); process.exit(1);
+  console.error('❌  Missing TELEGRAM_CHAT_ID'); process.exit(1);
 }
 
 const RAW_IDS = (process.env.LOCATION_IDS || 'chromeheartsmiami,chromehearts').split(',').map(s => s.trim()).filter(Boolean);
@@ -43,7 +41,7 @@ const CONFIG = {
   lookAheadDays: Number(process.env.LOOK_AHEAD_DAYS) || 60,
   logFile: path.join(__dirname, 'monitor.log'),
   repeatAlertMs: 5 * 60 * 1000,
-  browserRecycleMs: 30 * 60 * 1000, // recycle Playwright every 30 min if used
+  maxRetries: 3,
 };
 
 const BASE = 'https://api.waitwhile.com/v2/public/visits';
@@ -56,12 +54,10 @@ for (const loc of LOCATIONS) {
 let checkCount = 0;
 let consecutiveErrors = 0;
 let checking = false;
-let useBrowser = false; // flipped true only if direct HTTPS gets blocked
-let browser = null;
-let browserContext = null;
-let browserLaunchedAt = 0;
+let lastHealthAlertAt = 0;
 
 const padTo2 = n => String(n).padStart(2, '0');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function nowStr() {
   const d = new Date();
@@ -92,7 +88,6 @@ function formatSlot(slot) {
   return JSON.stringify(slot);
 }
 
-// ─── Telegram ──────────────────────────────────────────────────────────────────
 function sendToOne(chatId, text) {
   return new Promise((resolve) => {
     const body = JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' });
@@ -144,8 +139,7 @@ async function triggerAlert(loc, slots, isRepeat = false) {
   await sendTelegram(msg);
 }
 
-// ─── Direct HTTPS (preferred — no Chromium memory) ─────────────────────────────
-function fetchJsonDirect(url) {
+function fetchJson(url) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, {
       headers: {
@@ -154,21 +148,23 @@ function fetchJsonDirect(url) {
         'Origin': 'https://waitwhile.com',
         'Referer': 'https://waitwhile.com/',
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-site',
       },
     }, (res) => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
-        if (res.statusCode === 403 || res.statusCode === 401) {
-          const err = new Error(`HTTP ${res.statusCode} blocked`);
-          err.blocked = true;
-          return reject(err);
+        // HTML 403 pages from WAF
+        if (res.statusCode === 403 || res.statusCode === 401 || data.trimStart().startsWith('<!')) {
+          return reject(new Error(`HTTP ${res.statusCode || 'blocked'} (WAF/forbidden)`));
         }
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          return reject(new Error(`HTTP ${res.statusCode} — ${data.substring(0, 200)}`));
+          return reject(new Error(`HTTP ${res.statusCode} — ${data.substring(0, 160)}`));
         }
         try { resolve(JSON.parse(data)); }
-        catch (e) { reject(new Error(`JSON parse error: ${e.message}`)); }
+        catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
       });
     });
     req.on('error', reject);
@@ -176,89 +172,21 @@ function fetchJsonDirect(url) {
   });
 }
 
-// ─── Playwright fallback (only if WAF blocks direct) ───────────────────────────
-async function closeBrowser() {
-  const ctx = browserContext;
-  const br = browser;
-  browserContext = null;
-  browser = null;
-  browserLaunchedAt = 0;
-  try { if (ctx) await ctx.close(); } catch (_) {}
-  try { if (br) await br.close(); } catch (_) {}
-}
-
-async function ensureBrowserContext() {
-  if (browserContext && browser?.isConnected()) {
-    if (Date.now() - browserLaunchedAt > CONFIG.browserRecycleMs) {
-      log('♻️  Recycling browser to free memory...');
-      await closeBrowser();
-    } else {
-      return browserContext;
-    }
-  }
-
-  const { chromium } = require('playwright');
-  browser = await chromium.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--disable-extensions',
-      '--disable-background-networking',
-      '--disable-software-rasterizer',
-      '--single-process',
-      '--js-flags=--max-old-space-size=128',
-    ],
-  });
-
-  browserContext = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    extraHTTPHeaders: {
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Origin': 'https://waitwhile.com',
-      'Referer': 'https://waitwhile.com/',
-    },
-  });
-
-  browserLaunchedAt = Date.now();
-  browser.on('disconnected', () => {
-    browser = null;
-    browserContext = null;
-    browserLaunchedAt = 0;
-  });
-
-  return browserContext;
-}
-
-async function fetchJsonBrowser(url) {
-  const ctx = await ensureBrowserContext();
-  const res = await ctx.request.get(url, {
-    headers: { 'Accept': 'application/json, text/plain, */*' },
-    timeout: 15_000,
-  });
-  if (!res.ok()) throw new Error(`HTTP ${res.status()} — ${(await res.text()).substring(0, 200)}`);
-  return res.json();
-}
-
 async function apiGet(url) {
-  if (!useBrowser) {
+  let lastErr;
+  for (let attempt = 1; attempt <= CONFIG.maxRetries; attempt++) {
     try {
-      return await fetchJsonDirect(url);
+      return await fetchJson(url);
     } catch (err) {
-      if (err.blocked) {
-        log('⚠️  Direct API blocked by WAF — enabling Playwright fallback');
-        useBrowser = true;
-      } else {
-        throw err;
+      lastErr = err;
+      if (attempt < CONFIG.maxRetries) {
+        await sleep(1000 * attempt); // 1s, 2s backoff
       }
     }
   }
-  return fetchJsonBrowser(url);
+  throw lastErr;
 }
 
-// ─── Check one location ────────────────────────────────────────────────────────
 async function checkLocation(loc) {
   const fromDate = isoDatetime(0);
   const toDate = isoDatetime(CONFIG.lookAheadDays);
@@ -294,7 +222,7 @@ async function checkLocation(loc) {
 }
 
 async function checkAll() {
-  if (checking) return; // never overlap polls (prevents zombie Chromium launches)
+  if (checking) return;
   checking = true;
   checkCount++;
   const summary = [];
@@ -308,26 +236,26 @@ async function checkAll() {
       } catch (err) {
         anyError = true;
         summary.push(`⚠️ ${loc.name}`);
-        log(`⚠️  ${loc.name} error: ${err.message.split('\n')[0]}`);
-        // Properly close — do NOT just null (that left zombie Chromium processes)
-        if (useBrowser) await closeBrowser();
+        log(`⚠️  ${loc.name} error: ${err.message}`);
       }
     }
 
     if (anyError) {
       consecutiveErrors++;
+      if (consecutiveErrors >= 10 && Date.now() - lastHealthAlertAt > 30 * 60 * 1000) {
+        lastHealthAlertAt = Date.now();
+        await sendTelegram(`⚠️ <b>Monitor health warning</b>\n${consecutiveErrors} consecutive failed checks.\nStill retrying every ${CONFIG.pollIntervalMs / 1000}s.`);
+      }
       if (consecutiveErrors >= 5) {
-        log('🔴 5 consecutive errors — pausing 2 minutes and closing browser...');
-        await closeBrowser();
-        await new Promise(r => setTimeout(r, 120_000));
+        log('🔴 5 consecutive errors — backing off 90s...');
+        await sleep(90_000);
         consecutiveErrors = 0;
       }
     } else {
       consecutiveErrors = 0;
     }
 
-    const mode = useBrowser ? 'browser' : 'http';
-    process.stdout.write(`\r[${nowStr()}] #${checkCount} [${mode}] — ${summary.join(' | ')}${' '.repeat(8)}`);
+    process.stdout.write(`\r[${nowStr()}] #${checkCount} — ${summary.join(' | ')}${' '.repeat(8)}`);
   } finally {
     checking = false;
   }
@@ -340,46 +268,31 @@ async function main() {
   console.log('╚══════════════════════════════════════════════════════════╝');
   LOCATIONS.forEach(l => console.log(`  📍 ${l.name}`));
   console.log(`  Polling : every ${CONFIG.pollIntervalMs / 1000}s  |  Look-ahead: ${CONFIG.lookAheadDays} days`);
-  console.log(`  Mode    : lightweight HTTPS (Playwright only if WAF blocks)`);
-  console.log(`  Telegram: ${TELEGRAM_CHAT_IDS.length} recipient(s): ${TELEGRAM_CHAT_IDS.join(', ')}`);
+  console.log(`  Mode    : HTTPS only (no Chromium — stable on Railway)`);
+  console.log(`  Telegram: ${TELEGRAM_CHAT_IDS.length} recipient(s)`);
   console.log('──────────────────────────────────────────────────────────\n');
 
   log(`Monitor started — watching ${LOCATIONS.map(l => l.id).join(', ')}`);
 
-  // Probe once: prefer direct HTTPS so we never start Chromium unless needed
+  // Startup probe
   try {
-    const probe = await fetchJsonDirect(
+    const probe = await apiGet(
       `${BASE}/${LOCATIONS[0].id}/first-available-slots` +
       `?fromDate=${encodeURIComponent(isoDatetime(0))}&toDate=${encodeURIComponent(isoDatetime(7))}&maxNumSlots=1`
     );
-    log(`✅ Direct HTTPS works (${Array.isArray(probe) ? probe.length : 0} slots in probe) — no Chromium needed`);
+    log(`✅ API OK (probe returned ${Array.isArray(probe) ? probe.length : 0} slots)`);
   } catch (err) {
-    if (err.blocked) {
-      useBrowser = true;
-      log('⚠️  Direct HTTPS blocked — starting Playwright...');
-      await ensureBrowserContext();
-      log('Browser ready');
-    } else {
-      log(`⚠️  Probe failed (${err.message}) — will retry each poll`);
-    }
+    log(`⚠️  Startup probe failed: ${err.message} — will keep retrying`);
   }
 
   await sendTelegram(
-    `✅ <b>Monitor restarted</b> (memory fix)\n\n` +
+    `✅ <b>Monitor restarted</b>\n\n` +
     LOCATIONS.map(l => `📍 <b>${l.name}</b>\n👉 <a href="${l.bookingUrl}">Book</a>`).join('\n\n') +
-    `\n\n🕐 Checking every ${CONFIG.pollIntervalMs / 1000}s`
+    `\n\n🕐 Checking every ${CONFIG.pollIntervalMs / 1000}s (HTTPS, no browser)`
   );
 
   await checkAll();
   setInterval(checkAll, CONFIG.pollIntervalMs);
-
-  // Safety: if somehow using browser, recycle on a timer
-  setInterval(async () => {
-    if (useBrowser && browser) {
-      log('♻️  Scheduled browser recycle');
-      await closeBrowser();
-    }
-  }, CONFIG.browserRecycleMs);
 }
 
 main().catch(err => { console.error('Fatal:', err); process.exit(1); });

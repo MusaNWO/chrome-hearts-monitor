@@ -1,16 +1,13 @@
 {
   "name": "chrome-hearts-monitor",
-  "version": "1.0.0",
-  "description": "Chrome Hearts Miami appointment slot monitor",
+  "version": "1.1.0",
+  "description": "Chrome Hearts appointment slot monitor with Telegram alerts",
   "main": "monitor.js",
   "scripts": {
     "start": "node monitor.js",
     "monitor": "node monitor.js"
   },
   "dependencies": {
-    "@playwright/browser-chromium": "^1.60.0",
-    "dotenv": "^17.4.2",
-    "playwright": "^1.60.0",
-    "playwright-core": "^1.60.0"
+    "dotenv": "^17.4.2"
   }
 }
