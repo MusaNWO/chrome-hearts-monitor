@@ -1,13 +1,17 @@
 {
   "name": "chrome-hearts-monitor",
-  "version": "1.1.0",
-  "description": "Chrome Hearts appointment slot monitor with Telegram alerts",
+  "version": "1.2.0",
+  "description": "Chrome Hearts appointment monitor with local auto-book testing",
   "main": "monitor.js",
   "scripts": {
     "start": "node monitor.js",
-    "monitor": "node monitor.js"
+    "monitor": "node monitor.js",
+    "book": "node book.js",
+    "book:dry": "DRY_RUN=1 node book.js",
+    "test:dry": "DRY_RUN=1 LOCATION_IDS=lasvegas-fontaine node monitor.js"
   },
   "dependencies": {
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "playwright": "^1.60.0"
   }
 }
