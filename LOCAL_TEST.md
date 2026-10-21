@@ -1,6 +1,23 @@
-# Local testing (no Telegram / no Railway)
+# Local testing + Monitor V2 (Telegram @CHM2_bot)
 
 Branch: `feature/auto-book`
+
+## V2 Telegram bot (does not affect the old bot)
+
+Old bot credentials stay in `.env` / Railway `master`.  
+V2 uses **`.env.v2`** + **`@CHM2_bot`**.
+
+```bash
+# Start V2 (alerts + BOOK button + auto-book)
+node monitor-v2.js
+
+# Or dry-run (no real Waitwhile booking)
+DRY_RUN=1 LOCATION_IDS=lasvegas-fontaine node monitor-v2.js
+```
+
+When a non-auto slot opens → Telegram alert with **BOOK**.  
+Tap BOOK → button becomes **BOOKING…** → books → sends manage URL.  
+Auto-book days/times still book without tapping.
 
 ## What this does
 

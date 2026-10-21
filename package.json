@@ -5,7 +5,9 @@
   "main": "monitor.js",
   "scripts": {
     "start": "node monitor.js",
+    "start:v2": "node monitor-v2.js",
     "monitor": "node monitor.js",
+    "monitor:v2": "node monitor-v2.js",
     "book": "node book.js",
     "book:dry": "DRY_RUN=1 node book.js",
     "test:dry": "DRY_RUN=1 LOCATION_IDS=lasvegas-fontaine node monitor.js"
