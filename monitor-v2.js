@@ -29,13 +29,23 @@ const CHAT_IDS = (process.env.TELEGRAM_CHAT_ID || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+const CONFIRM_TOKEN = process.env.TELEGRAM_CONFIRM_BOT_TOKEN || '';
+const CONFIRM_CHAT_IDS = (process.env.TELEGRAM_CONFIRM_CHAT_ID || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 if (!TOKEN || !CHAT_IDS.length) {
   console.error('❌  Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID in .env.v2');
   process.exit(1);
 }
 
-tg.configure({ token: TOKEN, chatIds: CHAT_IDS });
+tg.configure({
+  token: TOKEN,
+  chatIds: CHAT_IDS,
+  confirmToken: CONFIRM_TOKEN || undefined,
+  confirmChatIds: CONFIRM_CHAT_IDS.length ? CONFIRM_CHAT_IDS : undefined,
+});
 
 const RAW_IDS = (process.env.LOCATION_IDS || 'chromeheartsmiami,chromehearts')
   .split(',')
@@ -124,8 +134,9 @@ async function sendBookingResult(result, reason) {
       `Manage: <a href="${result.manageUrl}">${escapeHtml(result.manageUrl)}</a>`
     );
   }
-  const header = reason === 'AUTO' ? '🤖 <b>AUTO-BOOKED</b>\n\n' : '';
-  await tg.sendAll(header + html);
+  const header =
+    reason === 'AUTO' ? '🤖 <b>AUTO-BOOKED</b>\n\n' : '📲 <b>MANUAL BOOK</b>\n\n';
+  await tg.sendConfirm(header + html);
   log(`Telegram: sent booking result (${reason}) ok=${result.ok}`);
 }
 
@@ -147,7 +158,9 @@ async function doBook(loc, slot, reason) {
     return result;
   } catch (err) {
     log(`Booking error: ${err.message}`);
-    await tg.sendAll(`❌ Booking error at <b>${escapeHtml(loc.name)}</b>\n${escapeHtml(err.message)}`);
+    await tg.sendConfirm(
+      `❌ Booking error at <b>${escapeHtml(loc.name)}</b>\n${escapeHtml(err.message)}`
+    );
     return { ok: false, error: err.message };
   }
 }
@@ -182,6 +195,7 @@ async function sendManualAlert(loc, slot) {
 
 async function handleCallback(cq) {
   const { id, data, chatId, messageId, messageText } = cq;
+  log(`Telegram callback data=${data} chat=${chatId} msg=${messageId}`);
 
   if (data === 'noop' || data.startsWith('busy:')) {
     await tg.answerCallback(id, 'Already processing…');
@@ -196,6 +210,7 @@ async function handleCallback(cq) {
   const shortId = data.slice(5);
   const pending = pendingBooks.get(shortId);
   if (!pending) {
+    log(`BOOK miss: shortId=${shortId} not in pending (expired/restart)`);
     await tg.answerCallback(id, 'This offer expired — wait for a new alert');
     await tg.editMessageMarkup(chatId, messageId, {
       inline_keyboard: [[{ text: 'EXPIRED', callback_data: 'noop' }]],
@@ -221,15 +236,12 @@ async function handleCallback(cq) {
 
   if (result.ok) {
     pendingBooks.delete(shortId);
-    await tg.editMessageMarkup(chatId, messageId, {
-      inline_keyboard: [[{ text: 'BOOKED ✓', callback_data: 'noop' }]],
-    });
-    // Also update message text if possible
     const note = result.dryRun ? ' (dry-run)' : '';
+    // Keep alert chat light — full manage link goes to confirm bot/chat
     await tg.editMessageText(
       chatId,
       messageId,
-      `${messageText || ''}\n\n✅ <b>BOOKED${note}</b>\nManage: <a href="${result.manageUrl}">open confirmation</a>`,
+      `${messageText || ''}\n\n✅ <b>BOOKED${note}</b>\nConfirmation sent separately.`,
       {
         reply_markup: {
           inline_keyboard: [[{ text: 'BOOKED ✓', callback_data: 'noop' }]],
@@ -241,7 +253,7 @@ async function handleCallback(cq) {
     await tg.editMessageMarkup(chatId, messageId, {
       inline_keyboard: [[{ text: 'BOOK', callback_data: `book:${shortId}` }]],
     });
-    await tg.sendAll(
+    await tg.sendConfirm(
       `❌ Booking failed for <b>${escapeHtml(loc.name)}</b> ${escapeHtml(formatSlot(slot))}\n${escapeHtml(result.error || 'unknown')}`
     );
   }
@@ -327,7 +339,11 @@ async function main() {
   console.log(`  Polling   : every ${CONFIG.pollIntervalMs / 1000}s`);
   console.log(`  Auto-book : ${CONFIG.autoBook ? 'ON (Sun/Wed/Thu/Fri @ 11/12/1)' : 'OFF'}`);
   console.log(`  Dry-run   : ${CONFIG.dryRun ? 'YES' : 'NO'}`);
-  console.log(`  Telegram  : ${CHAT_IDS.join(', ')}`);
+  const conf = tg.confirmDestination();
+  console.log(`  Alerts    : ${CHAT_IDS.join(', ')}`);
+  console.log(
+    `  Confirms  : ${conf.chatIds.join(', ')}${conf.separate ? ' (separate)' : ' (same as alerts)'}`
+  );
   console.log(`  Config    : .env.v2 (old bot untouched)`);
   console.log('──────────────────────────────────────────────────────────\n');
 
@@ -339,23 +355,32 @@ async function main() {
       '',
       `Auto-book: ${CONFIG.autoBook ? 'ON' : 'OFF'} (Sun/Wed/Thu/Fri · 11/12/1)`,
       `Mode: ${CONFIG.dryRun ? 'DRY-RUN' : 'LIVE'}`,
+      conf.separate
+        ? 'Confirmations (manage links) go to the separate confirm chat.'
+        : 'Alerts + confirmations share this chat (set TELEGRAM_CONFIRM_* to split).',
       '',
       'You will get alerts with a <b>BOOK</b> button.',
-      'Matching auto-book slots are reserved automatically.',
     ].join('\n')
   );
 
-  // Start callback poller (non-blocking loop)
-  tg.startPolling(handleCallback, log).catch((e) => log(`Poller stopped: ${e.message}`));
+  // Drop any BOOK taps queued while we were down (avoids mass-booking on restart)
+  await tg.flushPendingUpdates(log);
 
+  // Register pending BOOK targets before listening for taps
   await checkAll();
   setInterval(checkAll, CONFIG.pollIntervalMs);
+
+  // Start callback poller after pendingBooks is populated
+  tg.startPolling(handleCallback, log).catch((e) => log(`Poller stopped: ${e.message}`));
 
   process.on('SIGINT', async () => {
     console.log('\nShutting down V2...');
     tg.stopPolling();
     await closeWaitwhile();
     process.exit(0);
+  });
+  process.on('SIGHUP', () => {
+    // Ignore hangup so background runs survive the launching shell
   });
 }
 

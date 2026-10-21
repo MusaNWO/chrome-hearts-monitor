@@ -1,10 +1,10 @@
 {
-  "name": "chrome-hearts-monitor",
-  "version": "1.2.0",
-  "description": "Chrome Hearts appointment monitor with local auto-book testing",
-  "main": "monitor.js",
+  "name": "chrome-hearts-monitor-v2",
+  "version": "2.0.0",
+  "description": "Chrome Hearts Waitwhile monitor V2 — Telegram BOOK + auto-book + confirmations bot",
+  "main": "monitor-v2.js",
   "scripts": {
-    "start": "node monitor.js",
+    "start": "node monitor-v2.js",
     "start:v2": "node monitor-v2.js",
     "monitor": "node monitor.js",
     "monitor:v2": "node monitor-v2.js",

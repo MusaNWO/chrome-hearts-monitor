@@ -4,5 +4,8 @@ node_modules/
 !.env.example
 !.env.v2.example
 monitor.log
+monitor-v2.log
+*.pid
 nohup.out
 .DS_Store
+.railway/
