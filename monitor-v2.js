@@ -275,7 +275,7 @@ async function checkLocation(loc) {
   const manual = [];
   for (const slot of slots || []) {
     if (bookedKeys.has(slotKey(loc.id, slot.date))) continue;
-    if (CONFIG.autoBook && isAutoBookSlot(slot)) auto.push(slot);
+    if (CONFIG.autoBook && isAutoBookSlot(slot, { locationId: loc.id })) auto.push(slot);
     else manual.push(slot);
   }
 
@@ -337,7 +337,16 @@ async function main() {
   console.log('╚══════════════════════════════════════════════════════════╝');
   LOCATIONS.forEach((l) => console.log(`  📍 ${l.name}`));
   console.log(`  Polling   : every ${CONFIG.pollIntervalMs / 1000}s`);
-  console.log(`  Auto-book : ${CONFIG.autoBook ? 'ON (Sun/Wed/Thu/Fri @ 11/12/1)' : 'OFF'}`);
+  const autoLocIds = (process.env.AUTO_BOOK_LOCATION_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const autoLocLabel = !CONFIG.autoBook
+    ? 'OFF'
+    : autoLocIds.length
+      ? `ON — ${autoLocIds.map((id) => LOCATION_NAMES[id] || id).join(', ')} (Sun/Wed/Thu/Fri @ 11/12/1)`
+      : 'ON — all locations (Sun/Wed/Thu/Fri @ 11/12/1)';
+  console.log(`  Auto-book : ${autoLocLabel}`);
   console.log(`  Dry-run   : ${CONFIG.dryRun ? 'YES' : 'NO'}`);
   const conf = tg.confirmDestination();
   console.log(`  Alerts    : ${CHAT_IDS.join(', ')}`);
@@ -353,7 +362,7 @@ async function main() {
       '',
       ...LOCATIONS.map((l) => `📍 ${escapeHtml(l.name)}`),
       '',
-      `Auto-book: ${CONFIG.autoBook ? 'ON' : 'OFF'} (Sun/Wed/Thu/Fri · 11/12/1)`,
+      `Auto-book: ${escapeHtml(autoLocLabel)}`,
       `Mode: ${CONFIG.dryRun ? 'DRY-RUN' : 'LIVE'}`,
       conf.separate
         ? 'Confirmations (manage links) go to the separate confirm chat.'
