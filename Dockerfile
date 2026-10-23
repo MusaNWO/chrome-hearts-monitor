@@ -20,4 +20,4 @@ ENV HEADED=1
 ENV DRY_RUN=0
 
 # xvfb so Playwright can run headed (required for Waitwhile reCAPTCHA)
-CMD ["xvfb-run", "-a", "node", "monitor-v2.js"]
+CMD ["sh", "-c", "exec xvfb-run -a stdbuf -oL -eL node monitor-v2.js"]
