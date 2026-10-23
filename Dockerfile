@@ -5,6 +5,7 @@ WORKDIR /app
 # Chromium system deps + virtual display for HEADED captcha on Railway
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
+    xauth \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
