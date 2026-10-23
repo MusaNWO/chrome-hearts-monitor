@@ -6,6 +6,6 @@
   },
   "deploy": {
     "restartPolicyType": "ALWAYS",
-    "startCommand": "xvfb-run -a --server-args=-screen 0 1280x720x24 node monitor-v2.js"
+    "startCommand": "xvfb-run -a node monitor-v2.js"
   }
 }
