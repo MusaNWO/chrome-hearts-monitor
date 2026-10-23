@@ -6,6 +6,6 @@
   },
   "deploy": {
     "restartPolicyType": "ALWAYS",
-    "startCommand": "xvfb-run -a stdbuf -oL -eL node monitor-v2.js"
+    "startCommand": "./docker-entrypoint.sh"
   }
 }
