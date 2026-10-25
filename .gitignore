@@ -9,3 +9,6 @@ monitor-v2.log
 nohup.out
 .DS_Store
 .railway/
+
+local-watch.log
+local-watch.pid
