@@ -61,6 +61,7 @@ const LOCATION_NAMES = {
 const LOCATIONS = RAW_IDS.map((id) => ({
   id,
   name: LOCATION_NAMES[id] || id,
+  bookingUrl: `https://waitwhile.com/locations/${id}/time?registration=booking`,
 }));
 
 const CONFIG = {
@@ -100,8 +101,8 @@ function isoDatetime(offsetDays = 0) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T00:00`;
 }
 function formatSlot(slot) {
-  const m = String(slot.date).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-  if (!m) return slot.date;
+  const m = String(slot.date || slot).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return String(slot.date || slot);
   const [, y, mo, d, h, mi] = m;
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -109,7 +110,10 @@ function formatSlot(slot) {
   let hour = Number(h);
   const ampm = hour >= 12 ? 'PM' : 'AM';
   hour = hour % 12 || 12;
-  return `${weekdays[dow]}, ${months[Number(mo) - 1]} ${Number(d)} · ${hour}:${mi} ${ampm}`;
+  const base = `${weekdays[dow]}, ${months[Number(mo) - 1]} ${Number(d)} · ${hour}:${mi} ${ampm}`;
+  const spots = slot.numAvailableSpots;
+  if (spots == null) return base;
+  return `${base} — ${spots} spot${spots !== 1 ? 's' : ''}`;
 }
 
 function nextShortId() {
@@ -165,32 +169,51 @@ async function doBook(loc, slot, reason) {
   }
 }
 
-async function sendManualAlert(loc, slot) {
-  const shortId = nextShortId();
-  pendingBooks.set(shortId, { loc, slot, locationId: loc.id });
+/**
+ * One summary alert like the original bot — lists all open slots + BOOK per row.
+ */
+async function sendLocationAlert(loc, slots, isRepeat = false) {
+  const list = (slots || []).slice(0, 10);
+  if (!list.length) return;
 
-  // Expire pending after 30 min
-  setTimeout(() => pendingBooks.delete(shortId), 30 * 60 * 1000);
+  const buttons = [];
+  for (const slot of list) {
+    const shortId = nextShortId();
+    pendingBooks.set(shortId, { loc, slot, locationId: loc.id });
+    setTimeout(() => pendingBooks.delete(shortId), 30 * 60 * 1000);
+    const label = `BOOK · ${formatSlot(slot)}`.slice(0, 64); // Telegram button limit
+    buttons.push([{ text: label, callback_data: `book:${shortId}` }]);
+  }
+
+  const header = isRepeat
+    ? `🔔 <b>REMINDER — Slots Still Open</b>`
+    : `🚨 <b>NEW SLOT AVAILABLE — Book Now!</b>`;
+  const bookingUrl = `https://waitwhile.com/locations/${loc.id}/time?registration=booking`;
+  const slotLines = list
+    .map((s, i) => `  ${i + 1}. ${escapeHtml(formatSlot(s))}`)
+    .join('\n');
 
   const text = [
-    `🚨 <b>SLOT OPEN — Book now</b>`,
-    ``,
+    header,
     `📍 <b>${escapeHtml(loc.name)}</b>`,
-    `🕐 ${escapeHtml(formatSlot(slot))}`,
     ``,
-    `Tap <b>BOOK</b> to reserve with temporary details.`,
-    `You'll get the manage link after booking.`,
-  ].join('\n');
+    `<b>Available (${slots.length} slot${slots.length !== 1 ? 's' : ''}):</b>`,
+    slotLines,
+    slots.length > 10 ? `  ...and ${slots.length - 10} more` : '',
+    ``,
+    `👉 <a href="${bookingUrl}">Tap here to book on Waitwhile</a>`,
+    ``,
+    `Or tap a <b>BOOK</b> button below to auto-reserve.`,
+    `<i>${escapeHtml(new Date().toLocaleString())}</i>`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 
-  const results = await tg.sendAlertWithBookButton({
-    text,
-    callbackData: `book:${shortId}`,
-    buttonLabel: 'BOOK',
-  });
-
+  const results = await tg.sendAlertWithButtons({ text, buttons });
   const ok = results.some((r) => r.ok);
-  log(`Telegram alert ${loc.name} ${slot.date} shortId=${shortId} ok=${ok}`);
-  return shortId;
+  log(
+    `Telegram ${isRepeat ? 'reminder' : 'alert'} ${loc.name} (${slots.length} slots) ok=${ok}`
+  );
 }
 
 async function handleCallback(cq) {
@@ -286,22 +309,17 @@ async function checkLocation(loc) {
     }
   }
 
-  // Manual alerts for newly seen non-auto slots
+  // Match original bot: one summary when NEW slots appear, or reminder every 5 min
   const newManual = manual.filter((sl) => !s.previousKeys.has(sl.date));
   const timeSince = Date.now() - s.lastAlertAt;
   const shouldRemind = manual.length > 0 && timeSince >= CONFIG.repeatAlertMs;
 
   if (newManual.length) {
     s.lastAlertAt = Date.now();
-    // Cap alerts per check to avoid spam
-    for (const slot of newManual.slice(0, 5)) {
-      await sendManualAlert(loc, slot);
-    }
+    await sendLocationAlert(loc, manual, false);
   } else if (shouldRemind) {
     s.lastAlertAt = Date.now();
-    for (const slot of manual.slice(0, 3)) {
-      await sendManualAlert(loc, slot);
-    }
+    await sendLocationAlert(loc, manual, true);
   }
 
   s.previousKeys = currentKeys;
