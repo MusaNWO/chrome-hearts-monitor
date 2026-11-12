@@ -378,7 +378,8 @@ async function checkAll() {
       outageAlertSent = false;
     }
 
-    process.stdout.write(`\r[${nowStr()}] #${checkCount} — ${parts.join(' | ')}${' '.repeat(8)}`);
+    // Newline (not \\r) so Railway log drain keeps each poll line
+    console.log(`[${nowStr()}] #${checkCount} — ${parts.join(' | ')}`);
   } finally {
     checking = false;
   }
