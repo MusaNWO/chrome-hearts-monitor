@@ -21,6 +21,8 @@ const {
   close: closeWaitwhile,
   getConsecutiveForbidden,
   isBookingActive,
+  acquirePollingLock,
+  releasePollingLock,
 } = require('./lib/waitwhile');
 const { bookSlot, bookedKeys, formatBookingResult, slotKey } = require('./lib/booking');
 const { isAutoBookSlot } = require('./lib/autobook');
@@ -338,12 +340,18 @@ async function checkAll() {
     return;
   }
   checking = true;
+  acquirePollingLock();
   checkCount++;
   try {
     const parts = [];
     let okCount = 0;
     let failCount = 0;
     for (const loc of LOCATIONS) {
+      if (isBookingActive()) {
+        parts.push(`⏸ ${loc.name} (book)`);
+        log('abort poll mid-cycle — booking started');
+        break;
+      }
       try {
         const r = await checkLocation(loc);
         okCount++;
@@ -387,6 +395,7 @@ async function checkAll() {
     // Newline (not \\r) so Railway log drain keeps each poll line
     console.log(`[${nowStr()}] #${checkCount} — ${parts.join(' | ')}`);
   } finally {
+    releasePollingLock();
     checking = false;
   }
 }
