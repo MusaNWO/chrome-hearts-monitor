@@ -19,6 +19,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env.v2') });
 const {
   getAvailableSlots,
   close: closeWaitwhile,
+  getConsecutiveForbidden,
 } = require('./lib/waitwhile');
 const { bookSlot, bookedKeys, formatBookingResult, slotKey } = require('./lib/booking');
 const { isAutoBookSlot } = require('./lib/autobook');
@@ -84,6 +85,8 @@ const bookingCallbacks = new Set(); // message keys already set to BOOKING…
 let checking = false;
 let checkCount = 0;
 let shortCounter = 0;
+let consecutivePollFails = 0;
+let outageAlertSent = false;
 
 function pad(n) {
   return String(n).padStart(2, '0');
@@ -332,17 +335,49 @@ async function checkAll() {
   checkCount++;
   try {
     const parts = [];
+    let okCount = 0;
+    let failCount = 0;
     for (const loc of LOCATIONS) {
       try {
         const r = await checkLocation(loc);
+        okCount++;
         parts.push(
           r.slots.length ? `✅ ${r.loc.name} (${r.slots.length})` : `⏳ ${r.loc.name}`
         );
       } catch (err) {
+        failCount++;
         parts.push(`⚠️ ${loc.name}`);
         log(`${loc.name}: ${err.message}`);
       }
     }
+
+    if (failCount && !okCount) {
+      consecutivePollFails++;
+      // Don't stay silent — tell Telegram once Waitwhile is blocking us
+      if (consecutivePollFails >= 3 && !outageAlertSent) {
+        outageAlertSent = true;
+        await tg
+          .sendAll(
+            [
+              '⚠️ <b>Monitor V2 cannot reach Waitwhile</b>',
+              '',
+              'Slot polls are getting blocked (HTTP 403).',
+              'Telegram is fine — no appointment alerts until Waitwhile access recovers.',
+              `Forbidden streak: ${getConsecutiveForbidden()}`,
+            ].join('\n')
+          )
+          .catch(() => {});
+      }
+    } else if (okCount) {
+      if (outageAlertSent) {
+        await tg
+          .sendAll('✅ <b>Waitwhile access restored</b> — slot alerts are live again.')
+          .catch(() => {});
+      }
+      consecutivePollFails = 0;
+      outageAlertSent = false;
+    }
+
     process.stdout.write(`\r[${nowStr()}] #${checkCount} — ${parts.join(' | ')}${' '.repeat(8)}`);
   } finally {
     checking = false;
