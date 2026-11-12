@@ -401,6 +401,12 @@ async function main() {
       : 'ON — all locations (Sun/Wed/Thu/Fri @ 11/12/1)';
   console.log(`  Auto-book : ${autoLocLabel}`);
   console.log(`  Dry-run   : ${CONFIG.dryRun ? 'YES' : 'NO'}`);
+  try {
+    const { proxyStatus, hasProxy } = require('./lib/waitwhile');
+    console.log(
+      `  Proxy     : ${hasProxy() ? `ON (${proxyStatus().current || 'will pick on first use'})` : 'OFF (Railway IP — reCAPTCHA often fails)'}`
+    );
+  } catch (_) {}
   const conf = tg.confirmDestination();
   console.log(`  Alerts    : ${CHAT_IDS.join(', ')}`);
   console.log(
