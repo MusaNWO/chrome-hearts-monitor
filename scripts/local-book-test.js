@@ -12,7 +12,11 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const { chromium } = require('playwright');
 const { randomGuest } = require('../lib/guest');
-const { manageUrl, pickServiceId } = require('../lib/waitwhile');
+const {
+  manageUrl,
+  pickServiceId,
+  buildPublicDataFieldAnswers,
+} = require('../lib/waitwhile');
 
 const V3_SITE_KEY = '6LfGdiEaAAAAAG5g6cu2j-r4SlU_dYRXQix2-jio';
 const ACTION = 'PUB_CREATE_VISIT';
@@ -104,6 +108,21 @@ async function main() {
     const person = randomGuest();
     console.log('Guest', person.name, person.phone, person.email);
 
+    let dataFields = [];
+    try {
+      const dfRes = await page.request.get(`${API}/data-fields/${locationId}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (dfRes.ok()) {
+        const rawFields = await dfRes.json();
+        dataFields = buildPublicDataFieldAnswers(rawFields);
+        console.log(
+          'Questionnaire answers:',
+          dataFields.map((d) => `${d.id}=${d.values.join('|')}`).join(', ') || '(none)'
+        );
+      }
+    } catch (_) {}
+
     const payload = {
       state: 'BOOKED',
       firstName: person.firstName,
@@ -116,6 +135,7 @@ async function main() {
       date: slot.date,
       duration: slot.duration || 3600,
     };
+    if (dataFields.length) payload.dataFields = dataFields;
 
     if (dryRun) {
       console.log('DRY_RUN payload OK', JSON.stringify(payload, null, 2));
