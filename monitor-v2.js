@@ -20,6 +20,7 @@ const {
   getAvailableSlots,
   close: closeWaitwhile,
   getConsecutiveForbidden,
+  isBookingActive,
 } = require('./lib/waitwhile');
 const { bookSlot, bookedKeys, formatBookingResult, slotKey } = require('./lib/booking');
 const { isAutoBookSlot } = require('./lib/autobook');
@@ -331,6 +332,11 @@ async function checkLocation(loc) {
 
 async function checkAll() {
   if (checking) return;
+  // Don't tear down / navigate the shared browser while a BOOK is running
+  if (isBookingActive()) {
+    log('skip poll — booking in progress');
+    return;
+  }
   checking = true;
   checkCount++;
   try {
